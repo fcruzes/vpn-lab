@@ -4,16 +4,36 @@ Laboratório de VPN com WireGuard: servidor Linux, NAT com nftables, kill switch
 
 ## O problema
 
-"A VPN conecta, mas no 4G as páginas não carregam; no Wi-Fi funciona." É uma das reclamações mais comuns de um produto VPN, e as causas (MTU, DNS, IPv6, NAT da operadora) só ficam claras quando se vê cada uma quebrar. Este lab monta uma VPN do zero, provoca essas falhas de propósito, mede e corrige, com comando e saída como prova.
+"A VPN conecta, mas no 4G as páginas não carregam; no Wi-Fi funciona." É uma das reclamações mais comuns de um produto VPN, e as causas (MTU, DNS, IPv6, NAT da operadora) só ficam claras quando se vê cada uma quebrar. Este lab monta uma VPN do zero, reproduz e documenta as falhas que apareceram, mede e corrige, com comando e saída resumida.
 
 ## Resumo em 30 segundos
 
-- **MTU no 4G, reproduzido com números da operadora:** o caminho móvel aceitava no máximo 1376 bytes dentro do túnel, o túnel estava em 1420, e os pacotes grandes sumiam sem aviso (buraco negro de PMTU). Corrigido com MSS clamping no servidor + MTU conservador no celular.
+- **MTU no 4G, reproduzido com números da operadora:** o caminho móvel aceitava no máximo 1376 bytes dentro do túnel, o túnel estava em 1420, e os pacotes grandes sumiam sem aviso (buraco negro de PMTU). Mitigado com MSS clamping no servidor (TCP) + MTU conservador no celular; o tráfego UDP que desce continua limitado pelo MTU do túnel no servidor (ver seção de MTU).
 - **"Conecta mas não carrega" tinha duas causas sobrepostas:** além do MTU, a CDN de um portal bloqueava o IP de data center da VPN (14 de 15 imagens com HTTP 403; 15 de 15 com 200 a partir de IP residencial).
 - **O kill switch "derrubou a internet", mas o culpado era o DNS:** o cliente herdava o resolver da operadora, que não responde a quem chega pela VPN.
 - **O próprio firewall do lab tirou o IPv6 do servidor:** o conntrack não reconhece a resposta DHCPv6 a um pedido multicast. Achado com `tcpdump`, depois de uma hipótese errada.
 - **Medição:** +6 ms de latência; o download com VPN (~46 Mbit/s) ficou colado no teto de banda da VM gratuita (~48 Mbit/s), com a CPU 95% ociosa: no download, o WireGuard não era o gargalo. O upload com VPN (~34) ficou abaixo do esperado, sem causa confirmada.
 - **Custo:** R$ 0 (Oracle Cloud Always Free).
+
+## Como foi feito
+
+Duas sessões, horário de Brasília: **4/10/2026, das 13h30 às 17h05** (servidor, clientes, kill switch, DNS, MTU no 4G, medição) e **5/10/2026, das 8h às 8h50** (teste de reboot, configs, script, revisão e publicação). Construído com o **Claude Code** como assistente. Divisão do trabalho:
+
+- **Eu:** escopo e decisões (provedor, região, o que testar, o que publicar); conta, rede e VM no console da Oracle; os comandos de configuração do servidor; os clientes no PC e no iPhone; os testes de uso (navegar em Wi-Fi e 4G, observar e relatar os sintomas); revisão final.
+- **Claude Code:** propôs arquitetura e comandos, rodou parte dos diagnósticos por SSH (capturas com `tcpdump`, varredura de MTU com ping DF, medições de throughput), redigiu o README, as configs comentadas e o `mtu-probe.sh`.
+
+Onde a IA errou, e o que pegou o erro:
+
+| Erro | Pego por |
+|---|---|
+| O próprio firewall que ela escreveu descartava as respostas DHCPv6 e tirou o IPv6 do servidor; antes, culpou o forwarding | `tcpdump` na placa |
+| Criou um ajuste "preventivo" de IPv6 que nunca foi necessário | teste de reboot |
+| O primeiro teste de queda do servidor mediu depois do religamento | log do servidor |
+| Achou que as imagens quebradas vinham por QUIC/UDP | MTU 1280 no celular não mudou nada |
+| Concluiu bloqueio da CDN a partir de uma única URL | amostra de 15 URLs com controle residencial |
+| Supôs CPU insuficiente como gargalo de throughput | `vmstat` durante o download |
+| Afirmou que o cliente Windows usa Wintun | documentação oficial: é WireGuardNT |
+| Usou `sudo` com redirecionamento que não lia o arquivo protegido do QR | `Permission denied` na execução |
 
 > Endereços neste documento usam faixas reservadas para documentação (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`). Nenhuma chave, IP real ou configuração de cliente é versionada.
 
@@ -27,6 +47,7 @@ examples/wg0.conf.example                  servidor WireGuard (chave privada lid
 examples/pc-windows.conf.example           cliente Windows com kill switch e DNS no túnel
 examples/celular.conf.example              cliente iOS (QR code), MTU automático
 scripts/mtu-probe.sh                       acha o MTU efetivo até um cliente por busca binária com ping DF
+PRD-conectado-sem-trafego.md               PRD de 1 página derivado do lab: problema, métrica, critérios de aceite
 LICENSE                                    MIT
 ```
 
@@ -67,7 +88,7 @@ Dois firewalls em camadas: a **security list** da VCN (nuvem) e o **nftables** d
 
 | Decisão | Por quê |
 |---|---|
-| Oracle Cloud Always Free, região São Paulo | Custo zero e ~15 ms de Curitiba; servidor longe esconderia o overhead do túnel atrás da latência geográfica |
+| Oracle Cloud Always Free, região São Paulo | Custo zero e região perto de Sorocaba (medido: 16 ms até 1.1.1.1 sem VPN, 22 ms com VPN); servidor longe esconderia o overhead do túnel atrás da latência geográfica |
 | VCN criada antes da VM, com IPv6 (/56 da Oracle, /64 na sub-rede pública) | Entender cada peça (sub-rede, internet gateway, rota) em vez de deixar o assistente esconder |
 | Chave SSH ed25519 gerada no PC, só a pública vai para a nuvem | Quem gera a chave privada deve ser o único a possuí-la |
 | `PermitRootLogin no` em `sshd_config.d/00-hardening.conf` | No sshd o **primeiro** valor lido vence; `00-` garante precedência sobre o `50-cloud-init.conf` |
@@ -82,7 +103,7 @@ Dois firewalls em camadas: a **security list** da VCN (nuvem) e o **nftables** d
 | SSH com `AllowUsers`, `AuthenticationMethods publickey` e limite de conexões novas por origem no nftables | O usuário padrão da imagem tem sudo sem senha, então a chave SSH é a única barreira do host; o limite por origem só poupa CPU e log contra robôs |
 | Novo peer adicionado com `wg set` + arquivo, sem reiniciar o serviço | Reiniciar o `wg-quick` derrubaria o túnel dos clientes já conectados |
 | Security list da Oracle: UDP 51820 de `0.0.0.0/0` e `::/0`, stateful | Celular muda de IP o tempo todo; quem protege é a chave do WireGuard, que não responde a quem não a tem |
-| Timer de rollback (`systemd-run --on-active=180 nft flush ruleset`) ao aplicar firewall remoto | Mudar firewall por SSH sem rede de segurança é como se tranca o próprio acesso |
+| Timer de rollback (`systemd-run --on-active=180 nft flush ruleset`) ao aplicar firewall remoto | Mudar firewall por SSH sem rede de segurança é o jeito clássico de trancar o próprio acesso |
 
 ## Testes com prova
 
@@ -144,7 +165,9 @@ $ curl -4 --interface 192.168.1.20 https://ifconfig.me   ->  198.51.100.20   (IP
 $ curl -4 --interface 192.168.1.20 https://ifconfig.me   ->  BLOQUEADO
 ```
 
-Teste de queda do servidor, com religamento agendado antes (`systemd-run --on-active`):
+**É este teste que prova o kill switch:** o mesmo comando, com e sem a opção, dá resultados diferentes.
+
+Teste de queda do servidor, com religamento agendado antes (`systemd-run --on-active`). Ele **não discrimina o kill switch**: o WireGuard não tem estado de "conexão caiu", então, com ou sem a opção, as rotas continuam apontando para o túnel e o tráfego morre lá dentro. O que ele mostra é que o túnel completo falha fechado e se recupera sozinho; a única linha que depende do kill switch é a do `--interface`:
 
 ```
 18:53:48  servidor: systemctl stop wg-quick@wg0
@@ -198,7 +221,7 @@ Correção em duas camadas:
    oifname "wg0" tcp flags & syn == syn tcp option maxseg size > 1316 tcp option maxseg size set 1316
    ```
    1316 = 1376 medido − 60 (IPv6 + TCP), serve para IPv4 e IPv6. Prova: SYN do celular com `mss 1380`, SYN-ACK entregue a ele com `mss 1316`.
-2. **MTU conservador no cliente móvel** (cobre também UDP: QUIC, chamadas, jogos): voltar o iPhone ao automático (1280).
+2. **MTU conservador no cliente móvel:** voltar o iPhone ao automático (1280). Isso limita o que o celular **envia** e o MSS que ele anuncia, mas **não o que desce**: o servidor encapsula o que chega da internet com o MTU do `wg0` (1420), então um datagrama UDP grande (QUIC, chamada, jogo) a caminho do celular continua passando de 1376 e morrendo no 4G; e, com o celular em 1280, tudo acima de 1280 também é descartado no próprio aparelho (medido: 1284 falha). Cobrir o UDP que desce exige baixar o MTU do `wg0` no servidor para no máximo 1376, o que vale para todos os clientes (o WireGuard não tem MTU por peer). É um trade-off de produto, não aplicado no lab.
 
 ### Imagens com "?" no portal: não era a rede, era reputação de IP
 
@@ -227,7 +250,7 @@ $ sudo wg show                               -> listening port 51820, 2 peers, m
 
 ## Medição: com e sem túnel
 
-PC Windows em Wi-Fi residencial (Curitiba), servidor em São Paulo. Latência: `ping -n 20 1.1.1.1`. Throughput: `curl` contra `speed.cloudflare.com` (download 50 MB, upload 20 MB, 3 rodadas). No download sem VPN a primeira rodada (104 Mbit/s) ficou fora da média por destoar das outras duas (226 e 219); com VPN as três rodadas foram estáveis (46, 46, 45) e todas entraram. Uma única sessão de medição, num domingo à tarde: é ordem de grandeza, não benchmark.
+PC Windows em Wi-Fi residencial (Sorocaba), servidor em São Paulo. Latência: `ping -n 20 1.1.1.1`. Throughput: `curl` contra `speed.cloudflare.com` (download 50 MB, upload 20 MB, 3 rodadas). No download sem VPN a primeira rodada (104 Mbit/s) ficou fora da média por destoar das outras duas (226 e 219); com VPN as três rodadas foram estáveis (46, 46, 45) e todas entraram. Uma única sessão de medição, num domingo à tarde: é ordem de grandeza, não benchmark.
 
 | | Sem VPN | Com VPN | Diferença |
 |---|---|---|---|
@@ -253,13 +276,13 @@ Leitura: no download, o overhead do WireGuard é pequeno (46 vs ~48 Mbit/s no te
    A resposta chegava na placa e o nosso `policy drop` a descartava: o pedido sai para um endereço multicast e a resposta volta de um unicast, então o conntrack a marca como `new`, não como `established`. O IPv6 já estava condenado desde a troca do firewall; o reload só antecipou a queda, que viria quando o aluguel DHCPv6 (1 dia) vencesse. Resolução: aceitar UDP 547→546 vindo de `fe80::/10`. Lição: hipótese plausível não é diagnóstico; o pacote na interface é.
 4. **Liguei o kill switch e "a internet caiu" — mas não era o kill switch, era o DNS.** O cliente do PC não definia DNS e herdava o resolver da operadora. Pelo túnel, a consulta chega à operadora vindo do IP da Oracle, e resolvers de operadora só atendem a própria rede. A captura no `wg0` mostrou o PC repetindo a mesma pergunta a cada 2 s, sem resposta. Sem kill switch o problema ficava escondido (navegadores com DNS próprio e outros caminhos); o kill switch fechou as saídas e expôs a dependência. Resolução: `DNS = 1.1.1.1, 2606:4700:4700::1111` no cliente. Lição de produto: cliente VPN que não define o próprio DNS ou quebra ou vaza.
 5. **Meu primeiro teste de queda do servidor mediu a coisa errada.** A sessão SSH de controle passava pelo túnel, congelou junto com o WireGuard, e o `curl` só rodou depois do religamento. Refeito agendando queda e religamento no servidor (`systemd-run`) antes de sair, e testando só depois.
-6. **"Conecta mas não carrega" no 4G tinha duas causas sobrepostas.** (a) MTU: túnel em 1420, caminho do 4G aceitando no máximo 1376 internos, sem ICMP de volta; resolvido com MSS clamping + MTU 1280 no móvel. (b) Imagens bloqueadas pela CDN por o IP ser de data center. Minha hipótese intermediária (imagens vindo por QUIC/UDP, imunes ao clamping) caiu quando o MTU 1280 não mudou nada; e minha primeira conclusão sobre o 403 veio de uma única URL, um ícone. Só a amostra de 15 URLs com controle residencial fechou o diagnóstico.
+6. **"Conecta mas não carrega" no 4G tinha duas causas sobrepostas.** (a) MTU: túnel em 1420, caminho do 4G aceitando no máximo 1376 internos, sem ICMP de volta; mitigado com MSS clamping (TCP) + MTU 1280 no móvel; o UDP que desce depende do MTU do `wg0`. (b) Imagens bloqueadas pela CDN por o IP ser de data center. Minha hipótese intermediária (imagens vindo por QUIC/UDP, imunes ao clamping) caiu quando o MTU 1280 não mudou nada; e minha primeira conclusão sobre o 403 veio de uma única URL, um ícone. Só a amostra de 15 URLs com controle residencial fechou o diagnóstico.
 7. **Um ajuste de rede "preventivo" que nunca foi necessário.** No meio do problema do IPv6, criei um drop-in do `systemd-networkd` forçando `IPv6AcceptRA=yes`, por ter lido no manual que o RA é desligado quando há forwarding. A gravação do arquivo falhou (ficou com 0 bytes) e ninguém percebeu; depois do reboot, com forwarding ligado, a rota `proto ra` estava lá. O ajuste era desnecessário e foi removido. Lição: o teste de reboot serve também para descobrir o que sobra.
 8. **SSH caindo por inatividade.** A sessão parada era derrubada no caminho (timeout de NAT). Resolução: `ServerAliveInterval 30` no `~/.ssh/config` do cliente. É o mesmo problema que o `PersistentKeepalive` do WireGuard resolve.
 
-## Revisão independente
+## Revisão por agente de IA
 
-Antes da publicação, o repositório passou por uma revisão cega (um revisor sem acesso ao contexto, só ao disco e ao histórico git), com foco em segurança e boas práticas. Nenhum segredo foi encontrado. O que ela apontou e foi corrigido:
+Antes da publicação, o repositório passou por uma revisão cega feita por um agente de IA (sem acesso à conversa em que o lab foi construído, só ao disco e ao histórico git), com foco em segurança e boas práticas. Nenhum segredo foi encontrado. O que ela apontou e foi corrigido:
 
 - **IP da rede doméstica no histórico:** um IP de LAN real tinha ficado no primeiro commit, embora já trocado no seguinte. O histórico foi reescrito antes do primeiro push.
 - **Cliente da VPN alcançando a nuvem por dentro:** o forward permitia ao cliente chegar à rede privada da VCN e ao serviço de metadados da instância. Bloqueado no nftables.
@@ -268,20 +291,25 @@ Antes da publicação, o repositório passou por uma revisão cega (um revisor s
 - **`mtu-probe.sh`:** validação de argumentos (inclusive tentativa de injeção via expressão aritmética), `--` antes do destino, erros em stderr; `shellcheck` sem avisos.
 - **README:** contradição sobre onde a chave do celular é gerada, upload sem explicação apresentado como se fechasse, afirmação de "no-logs" ampla demais, mecanismo do buraco negro de PMTU afirmado além da evidência e afirmação sobre o iOS sem fonte.
 
-## Cobertura: tópicos de um produto VPN × o que o lab exercitou
+## Cobertura: tópicos de um produto VPN
 
-| Tópico | Onde aparece neste lab |
-|---|---|
-| WireGuard, wg-quick, wireguard-go | Servidor com `wg-quick`; o app iOS roda `wireguard-go` dentro de uma NetworkExtension |
-| nftables, NAT, roteamento, IPv6 | `table inet` com NAT44 e NAT66, forwarding, DHCPv6 e Router Advertisements |
-| MTU | Limite do 4G medido (1376), MSS clamping, MTU 1280 no móvel |
-| Kill switch e DNS leak | Teste de fuga pela placa Wi-Fi, queda do servidor, DNS dentro do túnel |
-| NetworkExtension (iOS), drivers de túnel no Windows | MTU 1280 decidido no código da NetworkExtension; o cliente Windows atual usa o WireGuardNT (driver de kernel), e não o Wintun, que é a opção em espaço de usuário usada pelo `wireguard-go` |
-| Gestão de chaves, secure storage | PC: chave privada gerada no aparelho. Celular: gerada no servidor, entregue por QR e com a cópia apagada (com as limitações da tabela de decisões); config do cliente Windows guardada com DPAPI em `C:\Program Files\WireGuard\Data` ([doc oficial](https://github.com/WireGuard/wireguard-windows/blob/master/docs/attacksurface.md)) |
-| Hardening | SSH só por chave, root bloqueado, `policy drop`, firewall de nuvem + host |
-| Latência, throughput, custo de banda | Tabela de medição; gargalo no teto de banda da instância, não na criptografia |
-| Privacidade / no-logs | O WireGuard em si não grava nada em disco: mantém só último handshake e último endpoint, em memória. O host não é "no-logs" por padrão: conntrack, journald e o log do sshd registram IPs, e uma política de no-logs precisa tratar cada um |
-| Provedores e PoPs | Escolha de região por latência; CDN bloqueando IP de data center |
+**Executado** = feito e medido neste lab. **Estudado** = lido em código-fonte ou documentação oficial, sem operar.
+
+| Tópico | Executado | Estudado |
+|---|---|---|
+| WireGuard, wg-quick | Servidor com `wg-quick`, 2 peers, chaves, MTU | |
+| wireguard-go | | O app iOS roda `wireguard-go` dentro de uma NetworkExtension |
+| nftables, NAT, roteamento, IPv6 | `table inet` com NAT44 e NAT66, forwarding, DHCPv6, isolamento do cliente | |
+| MTU | Limite do 4G medido (1376), MSS clamping, MTU 1280 no móvel | Limite do MTU do cliente para o tráfego que desce |
+| Kill switch e DNS leak | Teste de fuga com `--interface`, queda do servidor, DNS dentro do túnel | Exceções do iOS ([Proton VPN, 2020](https://protonvpn.com/blog/apple-ios-vulnerability-disclosure)) |
+| NetworkExtension (iOS) | | MTU 1280 decidido no código do app ([código-fonte](https://github.com/WireGuard/wireguard-apple/blob/master/Sources/WireGuardKit/PacketTunnelSettingsGenerator.swift)) |
+| Drivers de túnel no Windows | | Cliente atual usa WireGuardNT (kernel); Wintun é a opção em espaço de usuário do `wireguard-go` |
+| Gestão de chaves | PC: privada gerada no aparelho; celular: gerada no servidor, QR, cópia apagada | |
+| Secure storage | | Config do cliente Windows cifrada com DPAPI ([doc oficial](https://github.com/WireGuard/wireguard-windows/blob/master/docs/attacksurface.md)) |
+| Hardening | SSH só por chave, root bloqueado, `policy drop`, firewall de nuvem + host | |
+| Latência, throughput, custo | Medição com e sem túnel; teto de banda da instância; custo R$ 0 | |
+| Privacidade / no-logs | | WireGuard guarda só último handshake e endpoint, em memória; o host tem conntrack, journald e sshd registrando IPs |
+| Provedores e PoPs | Escolha de uma região por latência; CDN bloqueando IP de data center | Expansão de PoPs, reputação e rotação de IPs |
 
 ## Próximas fases
 
@@ -293,11 +321,11 @@ Antes da publicação, o repositório passou por uma revisão cega (um revisor s
 
 ## 10 perguntas que este lab responde
 
-1. **A VPN conecta, mas no 4G as páginas não carregam; no Wi-Fi funcionam. Por onde começa?** Pelo que muda entre as redes: o caminho. Aqui o 4G aceitava 1376 bytes dentro do túnel contra 1420 configurados, sem ICMP de volta. MSS clamping no servidor + MTU conservador no móvel. E checar causas sobrepostas: no mesmo sintoma havia uma CDN bloqueando o IP de data center.
+1. **A VPN conecta, mas no 4G as páginas não carregam; no Wi-Fi funcionam. Por onde começa?** Pelo que muda entre as redes: o caminho. Aqui o 4G aceitava 1376 bytes dentro do túnel contra 1420 configurados, sem ICMP de volta. MSS clamping no servidor (TCP) + MTU conservador no móvel; para o UDP que desce, só o MTU do túnel no servidor resolve. E checar causas sobrepostas: no mesmo sintoma havia uma CDN bloqueando o IP de data center.
 2. **O handshake acontece, mas nada navega. O que olhar?** O que vem depois do túnel: forwarding no kernel, regra de forward no firewall e NAT de saída. A imagem da Oracle vinha com `FORWARD reject`, exatamente esse sintoma.
 3. **Por que o `AllowedIPs` precisa de `0.0.0.0/0` e `::/0`?** Sem o `::/0`, a VPN mostra "conectado" e o IPv6 sai pela operadora: vazamento silencioso, pior do que não conectar.
 4. **Ligar o kill switch derrubou a internet do usuário. É defeito?** Provavelmente não: o kill switch revela dependências. Aqui era o DNS da operadora, que não responde a quem vem pela VPN. O app precisa sempre definir DNS dentro do túnel.
-5. **O que é kill switch e por que difere entre Windows e iOS?** "Se o túnel cair, corta, em vez de sair desprotegido." No Windows o app tranca as saídas com a Windows Filtering Platform; no iOS depende do que a NetworkExtension permite. Exemplo documentado: o iOS não encerra conexões abertas antes de a VPN subir, e algumas seguem fora do túnel por minutos ou horas ([Proton VPN, 2020](https://protonvpn.com/blog/apple-ios-vulnerability-disclosure)).
+5. **O que é kill switch e por que difere entre Windows e iOS?** "Se o túnel cair, corta, em vez de sair desprotegido." Para testar, não basta derrubar o servidor (o WireGuard não tem estado e o tráfego já morre dentro do túnel); é preciso tentar sair por fora dele, como o `curl --interface` deste lab. No Windows o app tranca as saídas com a Windows Filtering Platform; no iOS depende do que a NetworkExtension permite. Exemplo documentado: o iOS não encerra conexões abertas antes de a VPN subir, e algumas seguem fora do túnel por minutos ou horas ([Proton VPN, 2020](https://protonvpn.com/blog/apple-ios-vulnerability-disclosure)).
 6. **Por que o celular precisa de `PersistentKeepalive`, principalmente no 4G?** Quem escolhe a porta externa é o NAT da operadora (CGNAT), e o mapeamento expira se ficar parado. O keepalive o mantém vivo para o servidor conseguir falar com o celular.
 7. **Por que o app iOS do WireGuard usa MTU 1280 no automático?** Decisão de compatibilidade acima de desempenho: 1280 é o mínimo garantido do IPv6 e passa em quase qualquer rede. Medido aqui: com 1420 no 4G, as páginas quebravam.
 8. **Com a VPN, um site carrega sem imagens. É a rede?** Nem sempre. Comparar a mesma URL saindo por IP de data center e por IP residencial: aqui deu 403 contra 200. Reputação de IP é problema de produto (rotação, faixas, monitoramento), não de configuração.
