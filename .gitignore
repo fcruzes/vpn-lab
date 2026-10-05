@@ -1,0 +1,37 @@
+# Segredos: nunca versionar
+*.key
+*privatekey*
+*.conf
+!*.conf.example
+# Configs do servidor sem segredo, liberadas uma a uma (nunca wg0.conf real)
+!server/nftables.conf
+!server/sshd_config.d/00-hardening.conf
+!server/sysctl.d/99-vpn-forwarding.conf
+clients/
+secrets/
+.env
+.env.*
+!.env.example
+*.tfstate
+*.tfstate.*
+.terraform/
+inventory.ini
+!inventory.example.ini
+
+# Notas locais do assistente: nunca publicar
+CLAUDE.md
+
+# Próximas fases e diagnóstico: nunca versionar
+*.pem
+id_*
+!id_*.pub.example
+*.tfvars
+*.auto.tfvars
+*.tfvars.json
+*.pcap
+*.pcapng
+*.ovpn
+*.log
+# Imagens de QR code carregam a chave privada do cliente
+qr*.png
+*qr*.png

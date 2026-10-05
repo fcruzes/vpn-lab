@@ -1,0 +1,23 @@
+# /etc/wireguard/wg0.conf do servidor (exemplo, sem chaves reais).
+# A chave privada NÃO fica neste arquivo: é lida de /etc/wireguard/server.key
+# (permissão 600, root) no PostUp.
+#
+# Gerar as chaves do servidor:
+#   sudo sh -c 'umask 077; wg genkey > /etc/wireguard/server.key; wg pubkey < /etc/wireguard/server.key > /etc/wireguard/server.pub'
+
+[Interface]
+Address = 10.66.66.1/24, fd66:66:66::1/64
+ListenPort = 51820
+# Fixo: a placa da Oracle usa MTU 9000 e o automático daria 8920.
+MTU = 1420
+PostUp = wg set %i private-key /etc/wireguard/server.key
+
+[Peer]
+# pc-windows
+PublicKey = <CHAVE_PUBLICA_DO_PC>
+AllowedIPs = 10.66.66.2/32, fd66:66:66::2/128
+
+[Peer]
+# celular
+PublicKey = <CHAVE_PUBLICA_DO_CELULAR>
+AllowedIPs = 10.66.66.3/32, fd66:66:66::3/128

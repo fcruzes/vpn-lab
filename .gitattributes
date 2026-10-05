@@ -1,0 +1,5 @@
+# Arquivos que rodam ou são lidos no Linux: sempre LF, mesmo editados no Windows
+*.sh text eol=lf
+*.conf text eol=lf
+*.example text eol=lf
+*.md text eol=lf

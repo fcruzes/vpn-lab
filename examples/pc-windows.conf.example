@@ -1,0 +1,21 @@
+# Cliente WireGuard para Windows (exemplo, sem chaves reais).
+# A chave privada é gerada pelo próprio app ("Adicionar túnel vazio") e nunca
+# sai do PC; só a pública é cadastrada no servidor.
+#
+# "Bloquear tráfego fora do túnel (kill-switch)" marcado: o app mantém
+# AllowedIPs = 0.0.0.0/0, ::/0 e cria regras na Windows Filtering Platform.
+# Desmarcado, o app reescreve para 0.0.0.0/1, 128.0.0.0/1, ::/1, 8000::/1.
+
+[Interface]
+PrivateKey = <GERADA_PELO_APP>
+Address = 10.66.66.2/32, fd66:66:66::2/128
+# Sem esta linha o cliente herda o DNS da operadora, que não responde a quem
+# chega pela VPN: com kill switch a internet "cai"; sem ele, o DNS vaza.
+DNS = 1.1.1.1, 2606:4700:4700::1111
+
+[Peer]
+PublicKey = <CHAVE_PUBLICA_DO_SERVIDOR>
+# Sem o ::/0 a VPN mostra "conectado" e o IPv6 sai pela operadora.
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 203.0.113.10:51820
+PersistentKeepalive = 25

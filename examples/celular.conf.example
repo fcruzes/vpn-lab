@@ -1,0 +1,21 @@
+# Cliente WireGuard para iOS (exemplo, sem chaves reais).
+# Entregue por QR code gerado no servidor:
+#   sudo sh -c 'qrencode -t ansiutf8 < /etc/wireguard/clients/celular.conf'
+# Depois de escanear, a cópia da chave privada no servidor é apagada. Limite:
+# ela existiu em disco e no scrollback do terminal SSH. Mais seguro: gerar o
+# par no próprio app iOS e cadastrar só a chave pública no servidor.
+
+[Interface]
+PrivateKey = <GERADA_NO_SERVIDOR_E_APAGADA_APOS_O_QR>
+Address = 10.66.66.3/32, fd66:66:66::3/128
+DNS = 1.1.1.1, 2606:4700:4700::1111
+# Sem linha MTU de propósito: no automático o app iOS usa 1280, que passa em
+# qualquer rede. Com MTU = 1420 o 4G medido no lab perdia tudo acima de 1376.
+
+[Peer]
+PublicKey = <CHAVE_PUBLICA_DO_SERVIDOR>
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 203.0.113.10:51820
+# No 4G o CGNAT da operadora esquece mapeamentos UDP parados em dezenas de
+# segundos a poucos minutos; 25 s fica abaixo do caso comum.
+PersistentKeepalive = 25
